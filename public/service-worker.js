@@ -1,6 +1,7 @@
 const APP_PREFIX = 'budget-tracker-';
 const VERSION = 'v_01';
 const CACHE_NAME = APP_PREFIX + VERSION;
+const DATA_CACHE_NAME = 'budget-data-cache-v1'
 
 const FILES_TO_CACHE = [
   "/",
@@ -28,39 +29,56 @@ self.addEventListener('install', function(e) {
       return cache.addAll(FILES_TO_CACHE)
     })
   )
+  self.skipWaiting();
 });
 
 self.addEventListener('activate', function(e) {
   e.waitUntil(
-    caches.keys().then(function (keyList) {
-      let cacheKeepList = keyList.filter(function(key) {
-        return key.indexOf(APP_PREFIX);
-      })
-      cacheKeepList.push(CACHE_NAME);
-
+    caches.keys().then(keyList => {
       return Promise.all(
-        keyList.map(function(key, i) {
-          if (cacheKeepList.indexOf(key) === -1) {
-            console.log('deleting cache : ' + keyList[i]);
-            return caches.delete(keyList[i]);
+        keyList.map(key => {
+          if (key !== CACHE_NAME && key !== DATA_CACHE_NAME) {
+            console.log('Removing old cache data', key);
+            return caches.delete(key);
           }
         })
       );
     })
   );
+  self.clients.claim();
 });
 
 self.addEventListener('fetch', function(e) {
-  console.log('fetch request : ' + e.request.url)
+  if (e.request.url.includes('/api/')) {
+    e.respondWith(
+      caches
+        .open(DATA_CACHE_NAME)
+        .then(cache => {
+          return fetch(e.request)
+            .then(response => {
+              if (response.status === 200) {
+                cache.put(e.request.url, response.clone());
+              }
+              return response;
+            })
+            .catch(err => {
+              return cache.match(e.request);
+            });
+        })
+        .catch(err => console.log(err))
+    );
+    return;
+  }
   e.respondWith(
-    caches.match(e.request).then(function(request) {
-      if (request) {
-        console.log('responding with cache : ' + e.request.url)
-        return request
-      } else {
-        console.log('file is not cached, fetching : ' + e.request.url)
-        return fetch(e.request)
-      }
+    fetch(e.request).catch(function() {
+      return caches.match(e.request)
+      .then(function(response) {
+        if (response) {
+          return response;
+        } else if (e.reqeust.headers.get('accept').include('text/html')) {
+          return caches.match('/');
+        }
+      });
     })
-  )
-})
+  );
+});
